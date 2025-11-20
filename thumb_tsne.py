@@ -23,67 +23,77 @@ coords = TSNE(
     random_state=42
 ).fit_transform(data)
 
-# ---------- collision-free layout ----------
-def collision_layout(points, min_dist=10.0, steps=200):
-    pts = points.copy()
-    for _ in range(steps):
-        disp = np.zeros_like(pts)
-        for i in range(len(pts)):
-            for j in range(i+1, len(pts)):
-                delta = pts[j] - pts[i]
-                dist = np.linalg.norm(delta)
-                if dist < 1e-6:
-                    delta = np.random.randn(*delta.shape)
-                    dist = np.linalg.norm(delta)
-                overlap = min_dist - dist
-                if overlap > 0:
-                    push = (overlap / dist) * 0.5
-                    disp[i] -= push * delta
-                    disp[j] += push * delta
-        pts += disp
-    return pts
-
-coords2 = collision_layout(coords, min_dist=10.0, steps=150)
-
 # ----- figure -----
 fig, ax = plt.subplots(figsize=(10,10))
-ax.set_title("Puzzle Morphospace (Padding + Collision-Free + Hover Zoom)", fontsize=16)
+ax.set_title("Puzzle Morphospace (Hover Popup)", fontsize=16)
 
-# ----- fit axis -----
-ax.set_xlim(coords2[:,0].min() - 50, coords2[:,0].max() + 50)
-ax.set_ylim(coords2[:,1].min() - 50, coords2[:,1].max() + 50)
+# ----- invisible scatter (for hover detection only) -----
+scatter = ax.scatter(coords[:,0], coords[:,1], s=20, alpha=0)
 
-# ----- thumbnails -----
+# ----- draw small thumbnails -----
 THUMB_ZOOM = 2.0
-SMALL_THUMBS = []
-for (x, y), board in zip(coords2, boards):
+for (x, y), board in zip(coords, boards):
     img = OffsetImage(board, cmap='gray_r', zoom=THUMB_ZOOM)
     ab = AnnotationBbox(
         img, (x, y),
         frameon=True,
-        pad=0.2,  # pretty padding
+        pad=0.2,
         bboxprops=dict(edgecolor='black', linewidth=0.4)
     )
-    art = ax.add_artist(ab)
-    SMALL_THUMBS.append((art, board))
+    ax.add_artist(ab)
 
 ax.set_xticks([]); ax.set_yticks([])
 
-# ---- hover: show large thumbnail ----
-cursor = mplcursors.cursor(highlight=False)
+# ----- Popup state -----
+popup = None
+
+# ----- hover: show manual popup -----
+popup = None   # global
+
+cursor = mplcursors.cursor(scatter, hover=True)
 
 @cursor.connect("add")
 def on_hover(sel):
+    global popup
+
+    # 全部禁用默认annotation
+    sel.annotation.set_visible(False)
+
     idx = sel.index
-    artist, board = SMALL_THUMBS[idx]
+    board = boards[idx]
 
-    big_img = OffsetImage(board, cmap='gray_r', zoom=7.0)
+    # 如果有旧 popup，就删除
+    if popup is not None:
+        try:
+            popup.remove()
+        except:
+            pass
+        popup = None
 
-    sel.annotation.set(text="")
-    sel.annotation.set_offset((40, 40))
+    big_img = OffsetImage(board, cmap='gray_r', zoom=8.0)
 
-    sel.annotation.box_patch.set(fc="white", ec="black", lw=2)
-    sel.annotation.set_image(big_img.get_array())
+    popup = AnnotationBbox(
+        big_img,
+        (coords[idx,0] + 40, coords[idx,1] + 40),
+        frameon=True,
+        pad=0.3,
+        bboxprops=dict(edgecolor='black', linewidth=1.5)
+    )
+    ax.add_artist(popup)
+
+    plt.draw()
+
+
+
+@cursor.connect("remove")
+def on_unhover(sel):
+    global popup
+    if popup is not None:
+        popup.remove()
+        popup = None
+        plt.draw()
+
+
 plt.savefig("tsne_thumb.svg", dpi=50)
 plt.savefig("tsne_thumb.png", dpi=50)
 plt.show()
