@@ -2,9 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from sklearn.manifold import TSNE
-import mplcursors
+from scipy.spatial import cKDTree
 
-# ----- load data -----
+# ---------------------------------------------------
+# Load data
+# ---------------------------------------------------
 data = np.loadtxt("puzzle_morphospace_v01.csv", delimiter=",", skiprows=1)
 
 def int_to_board(x):
@@ -13,7 +15,15 @@ def int_to_board(x):
 
 boards = [int_to_board(i) for i in range(512)]
 
-# ----- t-SNE -----
+def board_to_rgb(board):
+    """convert 0/1 board into uint8 RGB for matplotlib"""
+    return np.stack([board * 255] * 3, axis=-1).astype(np.uint8)
+
+boards_rgb = [board_to_rgb(b) for b in boards]
+
+# ---------------------------------------------------
+# t-SNE
+# ---------------------------------------------------
 coords = TSNE(
     n_components=2,
     perplexity=30,
@@ -23,46 +33,66 @@ coords = TSNE(
     random_state=42
 ).fit_transform(data)
 
-# ----- figure -----
-fig, ax = plt.subplots(figsize=(10,10))
-ax.set_title("Puzzle Morphospace (Hover Popup)", fontsize=16)
+# KDTree for fast hover checking
+tree = cKDTree(coords)
 
-# ----- invisible scatter (for hover detection only) -----
+# ---------------------------------------------------
+# Plot base figure
+# ---------------------------------------------------
+fig, ax = plt.subplots(figsize=(10,10))
+ax.set_title("Puzzle Morphospace", fontsize=16)
+
+ax.set_xticks([]); ax.set_yticks([])
+
+# invisible scatter for hit test only
 scatter = ax.scatter(coords[:,0], coords[:,1], s=20, alpha=0)
 
-# ----- draw small thumbnails -----
+# ---------------------------------------------------
+# Draw small thumbnails
+# ---------------------------------------------------
 THUMB_ZOOM = 2.0
-for (x, y), board in zip(coords, boards):
-    img = OffsetImage(board, cmap='gray_r', zoom=THUMB_ZOOM)
+
+for (x, y), img in zip(coords, boards_rgb):
+    small = OffsetImage(img, zoom=THUMB_ZOOM)
     ab = AnnotationBbox(
-        img, (x, y),
+        small, (x, y),
         frameon=True,
-        pad=0.2,
+        pad=0.25,
         bboxprops=dict(edgecolor='black', linewidth=0.4)
     )
     ax.add_artist(ab)
 
-ax.set_xticks([]); ax.set_yticks([])
-
-# ----- Popup state -----
+# ---------------------------------------------------
+# Hover: show big popup
+# ---------------------------------------------------
 popup = None
+HOVER_DIST = 10
+BIG_ZOOM = 7.0
 
-# ----- hover: show manual popup -----
-popup = None   # global
-
-cursor = mplcursors.cursor(scatter, hover=True)
-
-@cursor.connect("add")
-def on_hover(sel):
+def on_move(event):
     global popup
 
-    # 全部禁用默认annotation
-    sel.annotation.set_visible(False)
+    if not event.inaxes:
+        # remove popup when mouse leaves axes
+        if popup is not None:
+            popup.remove()
+            popup = None
+            fig.canvas.draw_idle()
+        return
 
-    idx = sel.index
-    board = boards[idx]
+    # nearest point
+    mx, my = event.xdata, event.ydata
+    dist, idx = tree.query([mx, my])
 
-    # 如果有旧 popup，就删除
+    # too far: hide popup
+    if dist > HOVER_DIST:
+        if popup is not None:
+            popup.remove()
+            popup = None
+            fig.canvas.draw_idle()
+        return
+
+    # close to a point → show popup
     if popup is not None:
         try:
             popup.remove()
@@ -70,30 +100,25 @@ def on_hover(sel):
             pass
         popup = None
 
-    big_img = OffsetImage(board, cmap='gray_r', zoom=8.0)
+    big_img = OffsetImage(boards_rgb[idx], zoom=BIG_ZOOM)
 
     popup = AnnotationBbox(
         big_img,
-        (coords[idx,0] + 40, coords[idx,1] + 40),
+        (coords[idx, 0] + 40, coords[idx, 1] + 40),
         frameon=True,
-        pad=0.3,
-        bboxprops=dict(edgecolor='black', linewidth=1.5)
+        pad=0.4,
+        bboxprops=dict(edgecolor='black', linewidth=2)
     )
     ax.add_artist(popup)
-
-    plt.draw()
-
+    fig.canvas.draw_idle()
 
 
-@cursor.connect("remove")
-def on_unhover(sel):
-    global popup
-    if popup is not None:
-        popup.remove()
-        popup = None
-        plt.draw()
+fig.canvas.mpl_connect("motion_notify_event", on_move)
+
+plt.tight_layout()
 
 
-plt.savefig("tsne_thumb.svg", dpi=50)
 plt.savefig("tsne_thumb.png", dpi=50)
+plt.savefig("tsne_thumb.svg", dpi=50)
 plt.show()
+
